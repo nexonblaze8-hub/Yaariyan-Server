@@ -2,101 +2,85 @@ const express = require('express');
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const cors = require('cors');
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
 const uri = process.env.MONGO_URI;
 
+if (!uri) {
+    console.error("MONGO_URI environment variable not set.");
+    process.exit(1);
+}
+
 const client = new MongoClient(uri, {
-  serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true }
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
 });
 
-let usersCollection;
-let gamesCollection; // খেলার তথ্য রাখার জন্য নতুন collection
-let onlineUsers = new Set(); // অনলাইন ব্যবহারকারীদের তালিকা রাখার জন্য Set ব্যবহার করা হচ্ছে
+let db, usersCollection;
+let onlineUsers = new Set();
 
-async function connectDB() {
+async function connectAndStartServer() {
   try {
+    // Connect to the database
     await client.connect();
-    console.log("MongoDB ডেটাবেসের সাথে সফলভাবে সংযোগ হয়েছে!");
-    const db = client.db("YaariyanDB");
+    db = client.db("YaariyanDB");
     usersCollection = db.collection("users");
-    gamesCollection = db.collection("games"); // নতুন games collection
+    console.log("MongoDB connection successful!");
+
+    // Start the Express server only after the DB connection is successful
+    app.listen(port, () => {
+        console.log(`Yaariyan Server is live on port ${port}`);
+    });
+
   } catch (err) {
-    console.error("ডেটাবেস সংযোগে সমস্যা হয়েছে:", err);
+    console.error("Failed to connect to MongoDB", err);
     process.exit(1);
   }
 }
 
 // --- API Endpoints ---
+app.get('/', (req, res) => {
+    res.json({ message: 'Yaariyan Server is running!' });
+});
 
-app.get('/', (req, res) => res.json({ message: 'Yaariyan Server is live!' }));
+app.get('/online-users', (req, res) => {
+    res.status(200).json({ users: Array.from(onlineUsers) });
+});
 
-// User Authentication
 app.post('/register', async (req, res) => {
-    // ... আগের মতোই ...
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+        const existingUser = await usersCollection.findOne({ username });
+        if (existingUser) return res.status(400).json({ message: "এই ইউজারনেমটি 이미 ব্যবহৃত" });
+        await usersCollection.insertOne({ username, password, wins: 0, losses: 0, createdAt: new Date() });
+        res.status(201).json({ message: "রেজিস্ট্রেশন সফল হয়েছে!" });
+    } catch (err) { res.status(500).json({ message: "Server error" }); }
 });
+
 app.post('/login', async (req, res) => {
-    const { username, password } = req.body;
-    // ... আগের মতোই ...
-    // সফল লগইনের পর, অনলাইন তালিকায় যোগ করা হবে
-    onlineUsers.add(username);
-    res.status(200).json({ message: "লগইন সফল হয়েছে!", user: { username: user.username, wins: user.wins, losses: user.losses } });
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) return res.status(400).json({ message: "Username and password required" });
+        const user = await usersCollection.findOne({ username });
+        if (!user) return res.status(404).json({ message: "এই নামে কোনো ব্যবহারকারী নেই" });
+        if (user.password !== password) return res.status(401).json({ message: "ভুল পাসওয়ার্ড" });
+        onlineUsers.add(username);
+        res.status(200).json({ message: "লগইন সফল হয়েছে!" });
+    } catch (err) { res.status(500).json({ message: "Server error" }); }
 });
+
 app.post('/logout', (req, res) => {
     const { username } = req.body;
-    if (username) {
-        onlineUsers.delete(username);
-    }
-    res.status(200).json({ message: "লগ-আউট সফল হয়েছে" });
-});
-app.get('/online-users', (req, res) => res.status(200).json({ users: Array.from(onlineUsers) }));
-app.get('/user-stats/:username', async (req, res) => {
-    // ... আগের মতোই ...
+    if (username) onlineUsers.delete(username);
+    res.status(200).json({ message: "Logout successful" });
 });
 
-// --- নতুন Game API Endpoints ---
-
-// নতুন খেলা তৈরি করার জন্য
-app.post('/games/create', async (req, res) => {
-    const { createdBy, gameType } = req.body;
-    const newGame = {
-        gameType,
-        host: createdBy,
-        players: [createdBy],
-        status: 'waiting', // waiting, in-progress, finished
-        createdAt: new Date()
-    };
-    const result = await gamesCollection.insertOne(newGame);
-    res.status(201).json(result.ops[0]);
-});
-
-// চলমান খেলাগুলোর তালিকা পাঠানোর জন্য
-app.get('/games', async (req, res) => {
-    const waitingGames = await gamesCollection.find({ status: 'waiting' }).toArray();
-    res.status(200).json(waitingGames);
-});
-
-// খেলায় যোগ দেওয়ার জন্য
-app.post('/games/:gameId/join', async (req, res) => {
-    const { gameId } = req.params;
-    const { username } = req.body;
-    
-    const game = await gamesCollection.findOne({ _id: new MongoClient.ObjectID(gameId) });
-
-    if (game.players.length < 4 && !game.players.includes(username)) {
-        await gamesCollection.updateOne({ _id: new MongoClient.ObjectID(gameId) }, { $push: { players: username } });
-        res.status(200).json({ message: "খেলায় সফলভাবে যোগ দিয়েছেন!" });
-    } else {
-        res.status(400).json({ message: "টেবিল পূর্ণ বা আপনি ইতিমধ্যেই এই খেলায় আছেন।" });
-    }
-});
-
-async function startServer() {
-    await connectDB();
-    app.listen(port, () => console.log(`'Yaariyan' সার্ভার চালু হয়েছে`));
-}
-
-startServer();
+// Start the whole process
+connectAndStartServer();
