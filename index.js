@@ -18,16 +18,12 @@ const client = new MongoClient(uri, {
   serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true }
 });
 
-let db, usersCollection, gamesCollection;
-let onlineUsers = new Set();
+let db, gamesCollection;
 
-const suits = ['H', 'D', 'C', 'S']; // Hearts, Diamonds, Clubs, Spades
+const suits = ['H', 'D', 'C', 'S'];
 const values = ['2', '3', '4', '5', '6', '7', '8', '9', 'T', 'J', 'Q', 'K', 'A'];
 
-function createDeck() {
-    return suits.flatMap(suit => values.map(value => ({ value, suit })));
-}
-
+function createDeck() { return suits.flatMap(suit => values.map(value => ({ value, suit }))); }
 function shuffleDeck(deck) {
     for (let i = deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -39,61 +35,26 @@ function shuffleDeck(deck) {
 async function connectAndStartServer() {
   try {
     await client.connect();
-    db = client.db("YaariyanDB");
-    usersCollection = db.collection("users");
+    db = client.db("YaariyanGameDB");
     gamesCollection = db.collection("games");
     console.log("MongoDB connection successful!");
-
     app.listen(port, () => {
-        console.log(`Yaariyan Server is live on port ${port}`);
+        console.log(`Yaariyan Game Server is live on port ${port}`);
     });
-
   } catch (err) {
     console.error("Failed to connect to MongoDB", err);
     process.exit(1);
   }
 }
 
-// --- API Endpoints ---
-app.get('/', (req, res) => res.json({ message: 'Yaariyan Server is running!' }));
-// ... (Login, Register, Logout endpoints are unchanged)
-app.post('/register', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        if (!username || !password) return res.status(400).json({ message: "Username and password required" });
-        const existingUser = await usersCollection.findOne({ username });
-        if (existingUser) return res.status(400).json({ message: "এই ইউজারনেমটি 이미 ব্যবহৃত" });
-        await usersCollection.insertOne({ username, password, wins: 0, losses: 0, createdAt: new Date() });
-        res.status(201).json({ message: "রেজিস্ট্রেশন সফল হয়েছে!" });
-    } catch (err) { res.status(500).json({ message: "Server error" }); }
-});
+// API Endpoints
+app.get('/', (req, res) => res.json({ message: 'Yaariyan Game Server is running!' }));
 
-app.post('/login', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        if (!username || !password) return res.status(400).json({ message: "Username and password required" });
-        const user = await usersCollection.findOne({ username });
-        if (!user) return res.status(404).json({ message: "এই নামে কোনো ব্যবহারকারী নেই" });
-        if (user.password !== password) return res.status(401).json({ message: "ভুল পাসওয়ার্ড" });
-        onlineUsers.add(username);
-        res.status(200).json({ message: "লগইন সফল হয়েছে!" });
-    } catch (err) { res.status(500).json({ message: "Server error" }); }
-});
-
-app.post('/logout', (req, res) => {
-    const { username } = req.body;
-    if (username) onlineUsers.delete(username);
-    res.status(200).json({ message: "Logout successful" });
-});
-
-
-// --- Game Endpoints ---
 app.post('/games/create', async (req, res) => {
-    const { createdBy, gameType } = req.body;
+    const { host } = req.body;
     const newGame = {
-        gameType,
-        host: createdBy,
-        players: [{ username: createdBy, cards: [] }],
+        host,
+        players: [{ username: host, cards: [], isReady: false }],
         status: 'waiting',
         createdAt: new Date()
     };
@@ -102,8 +63,8 @@ app.post('/games/create', async (req, res) => {
 });
 
 app.get('/games/waiting', async (req, res) => {
-    const waitingGames = await gamesCollection.find({ status: 'waiting' }).toArray();
-    res.status(200).json(waitingGames);
+    const games = await gamesCollection.find({ status: 'waiting' }).toArray();
+    res.status(200).json(games);
 });
 
 app.post('/games/:gameId/join', async (req, res) => {
@@ -112,45 +73,48 @@ app.post('/games/:gameId/join', async (req, res) => {
     try {
         const game = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
         if (game && game.players.length < 4 && !game.players.some(p => p.username === username)) {
-            await gamesCollection.updateOne(
-                { _id: new ObjectId(gameId) },
-                { $push: { players: { username: username, cards: [] } } }
-            );
+            await gamesCollection.updateOne({ _id: new ObjectId(gameId) }, { $push: { players: { username, cards: [], isReady: false } } });
             res.status(200).json({ message: "Joined successfully!" });
-        } else {
-            res.status(400).json({ message: "Game is full or you are already in it." });
-        }
+        } else { res.status(400).json({ message: "Game full or already joined." }); }
     } catch(err) { res.status(500).json({message: "Error joining game"}) }
 });
 
-app.post('/games/:gameId/start', async (req, res) => {
+app.post('/games/:gameId/ready', async (req, res) => {
     const { gameId } = req.params;
-    try {
-        let game = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
+    const { username } = req.body;
+    await gamesCollection.updateOne(
+        { _id: new ObjectId(gameId), "players.username": username },
+        { $set: { "players.$.isReady": true } }
+    );
+    
+    const game = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
+    const allReady = game.players.every(p => p.isReady);
 
-        while (game.players.length < 4) {
-            game.players.push({ username: `Bot${game.players.length + 1}`, cards: [], isBot: true });
-        }
-
+    if (game.players.length === 4 && allReady) {
         const deck = shuffleDeck(createDeck());
-        game.players.forEach((player, index) => {
+        const updatedPlayers = game.players.map((player, index) => {
             player.cards = deck.slice(index * 13, (index + 1) * 13);
+            return player;
         });
-
-        await gamesCollection.updateOne(
-            { _id: new ObjectId(gameId) },
-            { $set: { players: game.players, status: 'in-progress' } }
-        );
-        res.status(200).json({ message: "Game started!" });
-    } catch (err) { res.status(500).json({message: "Error starting game"}) }
+        await gamesCollection.updateOne({ _id: new ObjectId(gameId) }, { $set: { players: updatedPlayers, status: 'in-progress' } });
+    }
+    res.status(200).json({ message: "Ready status updated." });
 });
 
-app.get('/games/:gameId/state', async (req, res) => {
-    const { gameId } = req.params;
+app.get('/games/:gameId/state/:username', async (req, res) => {
+    const { gameId, username } = req.params;
     try {
         const game = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
-        res.status(200).json(game);
+        if(game){
+            const myPlayer = game.players.find(p => p.username === username);
+            // Send the full game state but only my cards
+            const stateToSend = { ...game, myCards: myPlayer ? myPlayer.cards : [] };
+            delete stateToSend.players; // For simplicity, we can handle player info separately if needed
+            stateToSend.playersInfo = game.players.map(p => ({ username: p.username, cardCount: p.cards.length, isReady: p.isReady }));
+            res.status(200).json(stateToSend);
+        } else { res.status(404).json({message: "Game not found."})}
     } catch(err) { res.status(500).json({message: "Error fetching game state"}) }
 });
+
 
 connectAndStartServer();
