@@ -1,0 +1,17 @@
+{
+  "name": "yaariyan-server",
+  "version": "1.0.0",
+  "description": "Backend server for Yaariyan App",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mongodb": "^6.5.0"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
