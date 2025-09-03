@@ -18,21 +18,26 @@ const client = new MongoClient(uri, {
 });
 
 let usersCollection;
+let onlineUsers = [];
 
 async function connectDB() {
   try {
     await client.connect();
-    console.log("MongoDB database connection established successfully!");
+    console.log("MongoDB ডেটাবেসের সাথে সফলভাবে সংযোগ হয়েছে!");
     const db = client.db("YaariyanDB");
     usersCollection = db.collection("users");
   } catch (err) {
-    console.error("Database connection failed:", err);
+    console.error("ডেটাবেস সংযোগে সমস্যা হয়েছে:", err);
     process.exit(1);
   }
 }
 
 app.get('/', (req, res) => {
-    res.json({ message: 'Yaariyan Server is live and ready!' });
+    res.json({ message: 'Yaariyan Server is live and working correctly!' });
+});
+
+app.get('/online-users', (req, res) => {
+    res.status(200).json({ users: onlineUsers });
 });
 
 app.post('/register', async (req, res) => {
@@ -65,6 +70,11 @@ app.post('/login', async (req, res) => {
         if (user.password !== password) {
             return res.status(401).json({ message: "ভুল পাসওয়ার্ড" });
         }
+
+        if (!onlineUsers.includes(username)) {
+            onlineUsers.push(username);
+        }
+
         res.status(200).json({ message: "লগইন সফল হয়েছে!" });
     } catch (err) {
         res.status(500).json({ message: "সার্ভারে একটি সমস্যা হয়েছে" });
@@ -74,7 +84,7 @@ app.post('/login', async (req, res) => {
 async function startServer() {
     await connectDB();
     app.listen(port, () => {
-        console.log(`Yaariyan Server is listening on port ${port}`);
+        console.log(`'Yaariyan' সার্ভার চালু হয়েছে http://localhost:${port} এই ঠিকানায়`);
     });
 }
 
