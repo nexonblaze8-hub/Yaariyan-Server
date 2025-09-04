@@ -61,11 +61,9 @@ io.on('connection', (socket) => {
     socket.on('send_message', async ({ fromUser, toUser, message }) => {
         const chatMessage = { fromUser, toUser, message, timestamp: new Date() };
         await chatsCollection.insertOne(chatMessage);
-        // Find the recipient's socket id
         for (let [id, username] of onlineUsers.entries()) {
-            if (username === toUser) {
+            if (username === toUser || username === fromUser) {
                 io.to(id).emit('receive_message', chatMessage);
-                break;
             }
         }
     });
@@ -74,7 +72,6 @@ io.on('connection', (socket) => {
 // === API Endpoints ===
 app.get('/', (req, res) => res.json({ message: 'Welcome to Yaariyan Game Server!' }));
 
-// User Management & Profile
 app.post('/register', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ message: "Username and password are required." });
@@ -113,7 +110,6 @@ app.get('/online-users', (req, res) => {
     res.status(200).json({ users: Array.from(onlineUsers.values()) });
 });
 
-
 // Game Management
 app.post('/games/create', async (req, res) => {
     const { hostUsername, gameType } = req.body;
@@ -139,7 +135,6 @@ app.post('/games/:gameId/join', async (req, res) => {
         
         const updatedGame = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
         if (updatedGame.players.length === 4) {
-            // Start game logic can be triggered here
             await gamesCollection.updateOne({ _id: new ObjectId(gameId) }, { $set: { status: 'in-progress' } });
             io.to(gameId).emit('game_start', updatedGame);
         }
@@ -160,7 +155,6 @@ app.get('/games/:gameId', async (req, res) => {
         res.status(404).json({ message: "Game not found" });
     }
 });
-
 
 // Khata Management
 app.post('/khata/add', async (req, res) => {
@@ -183,19 +177,14 @@ app.put('/khata/settle/:transactionId', async (req, res) => {
     res.status(200).json({ message: "Transaction settled." });
 });
 
-
 // Chat Management
 app.get('/chat/:user1/:user2', async (req, res) => {
     const { user1, user2 } = req.params;
     const messages = await chatsCollection.find({
-        $or: [
-            { fromUser: user1, toUser: user2 },
-            { fromUser: user2, toUser: user1 }
-        ]
+        $or: [ { fromUser: user1, toUser: user2 }, { fromUser: user2, toUser: user1 } ]
     }).sort({ timestamp: 1 }).toArray();
     res.status(200).json(messages);
 });
-
 
 // Start Server
 async function startServer() {
