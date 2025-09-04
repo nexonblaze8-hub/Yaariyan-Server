@@ -19,7 +19,7 @@ if (!uri) {
 }
 const client = new MongoClient(uri, { serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true } });
 
-let db, usersCollection, gamesCollection, transactionsCollection;
+let db, usersCollection, gamesCollection, transactionsCollection, chatsCollection;
 let onlineUsers = new Map(); // socket.id => username
 
 async function connectDB() {
@@ -29,6 +29,7 @@ async function connectDB() {
         usersCollection = db.collection("users");
         gamesCollection = db.collection("games");
         transactionsCollection = db.collection("transactions");
+        chatsCollection = db.collection("chats");
         console.log("MongoDB connection successful!");
     } catch (err) {
         console.error("Failed to connect to MongoDB", err);
@@ -36,7 +37,6 @@ async function connectDB() {
     }
 }
 
-// Global function to update online user list for all clients
 function updateOnlineUserList() {
     io.emit('update_online_users', Array.from(onlineUsers.values()));
 }
@@ -52,20 +52,36 @@ io.on('connection', (socket) => {
             updateOnlineUserList();
         }
     });
+
+    socket.on('join_game_room', (gameId) => {
+        socket.join(gameId);
+        console.log(`Socket ${socket.id} joined room ${gameId}`);
+    });
+
+    socket.on('send_message', async ({ fromUser, toUser, message }) => {
+        const chatMessage = { fromUser, toUser, message, timestamp: new Date() };
+        await chatsCollection.insertOne(chatMessage);
+        // Find the recipient's socket id
+        for (let [id, username] of onlineUsers.entries()) {
+            if (username === toUser) {
+                io.to(id).emit('receive_message', chatMessage);
+                break;
+            }
+        }
+    });
 });
 
 // === API Endpoints ===
-
 app.get('/', (req, res) => res.json({ message: 'Welcome to Yaariyan Game Server!' }));
 
-// User Management
+// User Management & Profile
 app.post('/register', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ message: "Username and password are required." });
     const existingUser = await usersCollection.findOne({ username });
     if (existingUser) return res.status(400).json({ message: "Username already exists." });
     
-    await usersCollection.insertOne({ username, password, stats: { gamesPlayed: 0, wins: 0 } });
+    await usersCollection.insertOne({ username, password, stats: { gamesPlayed: 0, wins: 0, winRatio: 0 } });
     res.status(201).json({ message: "User registered successfully!" });
 });
 
@@ -83,22 +99,29 @@ app.post('/login', async (req, res) => {
     res.status(200).json({ message: "Login successful!" });
 });
 
+app.get('/profile/:username', async (req, res) => {
+    const { username } = req.params;
+    const user = await usersCollection.findOne({ username }, { projection: { password: 0 } });
+    if (user) {
+        res.status(200).json(user);
+    } else {
+        res.status(404).json({ message: "User not found." });
+    }
+});
+
 app.get('/online-users', (req, res) => {
     res.status(200).json({ users: Array.from(onlineUsers.values()) });
 });
 
-// Game Management (Simplified for now, will add detailed logic later)
+
+// Game Management
 app.post('/games/create', async (req, res) => {
     const { hostUsername, gameType } = req.body;
     const newGame = {
-        host: hostUsername,
-        gameType,
-        players: [hostUsername],
-        status: 'waiting',
-        createdAt: new Date()
+        host: hostUsername, gameType, players: [hostUsername], status: 'waiting', createdAt: new Date()
     };
     const result = await gamesCollection.insertOne(newGame);
-    io.emit('update_games'); // Notify all clients to refresh game list
+    io.emit('update_games');
     res.status(201).json({ message: "Game created successfully!", gameId: result.insertedId });
 });
 
@@ -113,32 +136,64 @@ app.post('/games/:gameId/join', async (req, res) => {
     const game = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
     if (game && game.players.length < 4 && !game.players.includes(username)) {
         await gamesCollection.updateOne({ _id: new ObjectId(gameId) }, { $push: { players: username } });
+        
+        const updatedGame = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
+        if (updatedGame.players.length === 4) {
+            // Start game logic can be triggered here
+            await gamesCollection.updateOne({ _id: new ObjectId(gameId) }, { $set: { status: 'in-progress' } });
+            io.to(gameId).emit('game_start', updatedGame);
+        }
+        
         io.emit('update_games');
         res.status(200).json({ message: "Joined game successfully!" });
     } else {
-        res.status(400).json({ message: "Cannot join game. It might be full or you've already joined." });
+        res.status(400).json({ message: "Cannot join game." });
     }
 });
 
-// Khata (Transaction) Management
+app.get('/games/:gameId', async (req, res) => {
+    const { gameId } = req.params;
+    try {
+        const game = await gamesCollection.findOne({ _id: new ObjectId(gameId) });
+        res.status(200).json(game);
+    } catch (e) {
+        res.status(404).json({ message: "Game not found" });
+    }
+});
+
+
+// Khata Management
 app.post('/khata/add', async (req, res) => {
     const { fromUser, toUser, amount, reason } = req.body;
     const transaction = { fromUser, toUser, amount: Number(amount), reason, date: new Date(), settled: false };
     await transactionsCollection.insertOne(transaction);
-    res.status(201).json({ message: "Transaction added successfully!" });
+    res.status(201).json({ message: "Transaction added!" });
 });
 
 app.get('/khata/:username', async (req, res) => {
     const { username } = req.params;
-    const transactionsGiven = await transactionsCollection.find({ fromUser: username, settled: false }).toArray();
-    const transactionsTaken = await transactionsCollection.find({ toUser: username, settled: false }).toArray();
-    res.status(200).json({ given: transactionsGiven, taken: transactionsTaken });
+    const given = await transactionsCollection.find({ fromUser: username, settled: false }).toArray();
+    const taken = await transactionsCollection.find({ toUser: username, settled: false }).toArray();
+    res.status(200).json({ given, taken });
 });
 
 app.put('/khata/settle/:transactionId', async (req, res) => {
     const { transactionId } = req.params;
     await transactionsCollection.updateOne({ _id: new ObjectId(transactionId) }, { $set: { settled: true } });
     res.status(200).json({ message: "Transaction settled." });
+});
+
+
+// Chat Management
+app.get('/chat/:user1/:user2', async (req, res) => {
+    const { user1, user2 } = req.params;
+    const messages = await chatsCollection.find({
+        $or: [
+            { fromUser: user1, toUser: user2 },
+            { fromUser: user2, toUser: user1 }
+        ]
+    }).sort({ timestamp: 1 }).toArray();
+    res.status(200).json(messages);
 });
 
 
