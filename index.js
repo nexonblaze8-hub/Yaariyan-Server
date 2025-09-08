@@ -39,32 +39,14 @@ async function setupAdminAccount() {
             console.log("Admin account not found. Creating a new one...");
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt);
-            const newAdmin = { fullName: "MTR (Admin)", email: "admin@yaariyan.local", username: ADMIN_USERNAME.toLowerCase(), password: hashedPassword, role: 'admin', status: 'approved', profilePictureUrl: "https://i.ibb.co/L1LQtBm/admin-avatar.png", bio: "Yaariyan App-এর অ্যাডমিনিস্ট্রেটর।", createdAt: new Date() };
+            const newAdmin = { fullName: "MTR (Admin)", email: "admin@yaariyan.local", username: ADMIN_USERNAME.toLowerCase(), password: hashedPassword, role: 'admin', status: 'approved', profilePictureUrl: "", bio: "Yaariyan App-এর অ্যাডমিনিস্ট্রেটর।", createdAt: new Date() };
             await usersCollection.insertOne(newAdmin);
             console.log("Admin account created successfully!");
         } else { console.log("Admin account verified."); }
     } catch (error) { console.error("Error during admin account setup:", error); }
 }
 
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (token == null) return res.status(401).json({ success: false, message: 'Token not provided' });
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ success: false, message: 'Token is invalid' });
-        req.user = user;
-        next();
-    });
-};
-
-const authorizeAdminOrCoLeader = async (req, res, next) => {
-    try {
-        const userInDb = await usersCollection.findOne({ email: req.user.email });
-        if (userInDb && (userInDb.role === 'admin' || userInDb.role === 'co-leader')) {
-            next();
-        } else { res.status(403).json({ success: false, message: "এই কাজটি করার জন্য আপনার অনুমতি নেই।" }); }
-    } catch (error) { res.status(500).json({ success: false, message: "অনুমতি যাচাই করার সময় সার্ভারে সমস্যা হয়েছে।" }); }
-};
+app.get('/', (req, res) => res.json({ success: true, message: 'Welcome to Yaariyan Game Server!' }));
 
 app.post('/register', async (req, res) => {
     try {
@@ -93,53 +75,7 @@ app.post('/login', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
-app.get('/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
-    try {
-        const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
-        res.status(200).json({ success: true, users: pendingUsers });
-    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
-});
-
-app.post('/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const result = await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { status: 'approved' } });
-        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
-        res.status(200).json({ success: true, message: "ব্যবহারকারীকে অনুমোদন করা হয়েছে।" });
-    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
-});
-
-app.delete('/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
-        if (result.deletedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
-        res.status(200).json({ success: true, message: "ব্যবহারকারীকে মুছে ফেলা হয়েছে।" });
-    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
-});
-
-// --- নতুন API: প্রোফাইল আপডেট করার জন্য ---
-app.post('/update-profile', authenticateToken, async (req, res) => {
-    try {
-        const { fullName, bio } = req.body;
-        const userId = req.user.userId; // টোকেন থেকে ব্যবহারকারীর আইডি নেওয়া হচ্ছে
-
-        if (!fullName) {
-            return res.status(400).json({ success: false, message: "সম্পূর্ণ নাম आवश्यक।" });
-        }
-
-        await usersCollection.updateOne(
-            { _id: new ObjectId(userId) },
-            { $set: { fullName: fullName, bio: bio } }
-        );
-
-        res.status(200).json({ success: true, message: "প্রোফাইল সফলভাবে আপডেট করা হয়েছে।" });
-
-    } catch (error) {
-        console.error("Profile update error:", error);
-        res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" });
-    }
-});
+// বাকি API গুলি (pending-users, approve, reject, update-profile) এখানে যোগ করা হবে যখন প্রয়োজন হবে।
 
 async function startServer() {
     await connectDB();
