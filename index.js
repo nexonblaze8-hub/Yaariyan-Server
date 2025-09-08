@@ -46,12 +46,10 @@ async function setupAdminAccount() {
     } catch (error) { console.error("Error during admin account setup:", error); }
 }
 
-// --- Middleware (নিরাপত্তা প্রহরী) ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (token == null) return res.status(401).json({ success: false, message: 'Token not provided' });
-
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.status(403).json({ success: false, message: 'Token is invalid' });
         req.user = user;
@@ -64,9 +62,7 @@ const authorizeAdminOrCoLeader = async (req, res, next) => {
         const userInDb = await usersCollection.findOne({ email: req.user.email });
         if (userInDb && (userInDb.role === 'admin' || userInDb.role === 'co-leader')) {
             next();
-        } else {
-            res.status(403).json({ success: false, message: "এই কাজটি করার জন্য আপনার অনুমতি নেই।" });
-        }
+        } else { res.status(403).json({ success: false, message: "এই কাজটি করার জন্য আপনার অনুমতি নেই।" }); }
     } catch (error) { res.status(500).json({ success: false, message: "অনুমতি যাচাই করার সময় সার্ভারে সমস্যা হয়েছে।" }); }
 };
 
@@ -76,7 +72,6 @@ app.post('/register', async (req, res) => {
         if (!fullName || !email || !password || !username) return res.status(400).json({ success: false, message: "সম্পূর্ণ তথ্য দিন।" });
         const existingUser = await usersCollection.findOne({ $or: [{email: email.toLowerCase()}, {username: username.toLowerCase()}] });
         if (existingUser) return res.status(400).json({ success: false, message: "এই ইমেল বা ইউজারনেমটি ব্যবহৃত হয়েছে।" });
-
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         const newUser = { fullName, email: email.toLowerCase(), username: username.toLowerCase(), password: hashedPassword, role: 'user', status: 'pending', profilePictureUrl: "", bio: "", createdAt: new Date() };
@@ -91,16 +86,13 @@ app.post('/login', async (req, res) => {
         if (!identifier || !password) return res.status(400).json({ success: false, message: "অনুগ্রহ করে সঠিক তথ্য দিন।" });
         const user = await usersCollection.findOne({ $or: [{ email: identifier.toLowerCase() }, { username: identifier.toLowerCase() }] });
         if (!user) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
-
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ success: false, message: "ভুল পাসওয়ার্ড।" });
-
         const accessToken = jwt.sign({ userId: user._id, email: user.email, role: user.role, fullName: user.fullName, username: user.username, status: user.status }, JWT_SECRET, { expiresIn: '7d' });
         res.status(200).json({ success: true, message: "লগইন সফল!", token: accessToken });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
-// --- নতুন API এন্ডপয়েন্ট ---
 app.get('/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
     try {
         const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
@@ -124,6 +116,29 @@ app.delete('/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, 
         if (result.deletedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
         res.status(200).json({ success: true, message: "ব্যবহারকারীকে মুছে ফেলা হয়েছে।" });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+// --- নতুন API: প্রোফাইল আপডেট করার জন্য ---
+app.post('/update-profile', authenticateToken, async (req, res) => {
+    try {
+        const { fullName, bio } = req.body;
+        const userId = req.user.userId; // টোকেন থেকে ব্যবহারকারীর আইডি নেওয়া হচ্ছে
+
+        if (!fullName) {
+            return res.status(400).json({ success: false, message: "সম্পূর্ণ নাম आवश्यक।" });
+        }
+
+        await usersCollection.updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { fullName: fullName, bio: bio } }
+        );
+
+        res.status(200).json({ success: true, message: "প্রোফাইল সফলভাবে আপডেট করা হয়েছে।" });
+
+    } catch (error) {
+        console.error("Profile update error:", error);
+        res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" });
+    }
 });
 
 async function startServer() {
