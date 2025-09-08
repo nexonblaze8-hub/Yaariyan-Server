@@ -17,10 +17,7 @@ app.use(express.json());
 const uri = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-default-super-secret-key-for-yaariyan';
 
-if (!uri) {
-    console.error("MONGO_URI environment variable not set.");
-    process.exit(1);
-}
+if (!uri) { console.error("MONGO_URI environment variable not set."); process.exit(1); }
 const client = new MongoClient(uri, { serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true } });
 
 let db, usersCollection;
@@ -30,10 +27,7 @@ async function connectDB() {
         db = client.db("YaariyanGameDB");
         usersCollection = db.collection("users");
         console.log("MongoDB connection successful!");
-    } catch (err) {
-        console.error("Failed to connect to MongoDB", err);
-        process.exit(1);
-    }
+    } catch (err) { console.error("Failed to connect to MongoDB", err); process.exit(1); }
 }
 
 async function setupAdminAccount() {
@@ -45,116 +39,96 @@ async function setupAdminAccount() {
             console.log("Admin account not found. Creating a new one...");
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt);
-            const newAdmin = {
-                fullName: "MTR (Admin)",
-                email: "admin@yaariyan.local",
-                username: ADMIN_USERNAME.toLowerCase(),
-                password: hashedPassword,
-                role: 'admin',
-                status: 'approved',
-                profilePictureUrl: "https://i.ibb.co/L1LQtBm/admin-avatar.png", // একটি ডিফল্ট অ্যাডমিন ছবি
-                bio: "Yaariyan App-এর অ্যাডমিনিস্ট্রেটর।",
-                createdAt: new Date()
-            };
+            const newAdmin = { fullName: "MTR (Admin)", email: "admin@yaariyan.local", username: ADMIN_USERNAME.toLowerCase(), password: hashedPassword, role: 'admin', status: 'approved', profilePictureUrl: "https://i.ibb.co/L1LQtBm/admin-avatar.png", bio: "Yaariyan App-এর অ্যাডমিনিস্ট্রেটর।", createdAt: new Date() };
             await usersCollection.insertOne(newAdmin);
             console.log("Admin account created successfully!");
-        } else {
-            console.log("Admin account verified.");
-        }
-    } catch (error) {
-        console.error("Error during admin account setup:", error);
-    }
+        } else { console.log("Admin account verified."); }
+    } catch (error) { console.error("Error during admin account setup:", error); }
 }
 
-app.get('/', (req, res) => res.json({ message: 'Welcome to Yaariyan Game Server!' }));
+// --- Middleware (নিরাপত্তা প্রহরী) ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.status(401).json({ success: false, message: 'Token not provided' });
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ success: false, message: 'Token is invalid' });
+        req.user = user;
+        next();
+    });
+};
+
+const authorizeAdminOrCoLeader = async (req, res, next) => {
+    try {
+        const userInDb = await usersCollection.findOne({ email: req.user.email });
+        if (userInDb && (userInDb.role === 'admin' || userInDb.role === 'co-leader')) {
+            next();
+        } else {
+            res.status(403).json({ success: false, message: "এই কাজটি করার জন্য আপনার অনুমতি নেই।" });
+        }
+    } catch (error) { res.status(500).json({ success: false, message: "অনুমতি যাচাই করার সময় সার্ভারে সমস্যা হয়েছে।" }); }
+};
 
 app.post('/register', async (req, res) => {
     try {
         const { fullName, email, password, username } = req.body;
-        if (!fullName || !email || !password || !username) {
-            return res.status(400).json({ success: false, message: "সম্পূর্ণ নাম, ইমেল, ইউজারনেম এবং পাসওয়ার্ড आवश्यक।" });
-        }
+        if (!fullName || !email || !password || !username) return res.status(400).json({ success: false, message: "সম্পূর্ণ তথ্য দিন।" });
         const existingUser = await usersCollection.findOne({ $or: [{email: email.toLowerCase()}, {username: username.toLowerCase()}] });
-        if (existingUser) {
-            if (existingUser.email === email.toLowerCase()) return res.status(400).json({ success: false, message: "এই ইমেলটি আগে থেকেই রেজিস্টার করা আছে।" });
-            if (existingUser.username === username.toLowerCase()) return res.status(400).json({ success: false, message: "এই ইউজারনেমটি অন্য কেউ ব্যবহার করছে।" });
-        }
+        if (existingUser) return res.status(400).json({ success: false, message: "এই ইমেল বা ইউজারনেমটি ব্যবহৃত হয়েছে।" });
+
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
-        
-        // --- নতুন পরিবর্তন এখানে ---
-        const newUser = {
-            fullName,
-            email: email.toLowerCase(),
-            username: username.toLowerCase(),
-            password: hashedPassword,
-            role: 'user',
-            status: 'pending',
-            profilePictureUrl: "", // <-- প্রোফাইল ছবির জন্য খালি জায়গা
-            bio: "",                 // <-- বায়োর জন্য খালি জায়গা
-            createdAt: new Date()
-        };
-        // --- পরিবর্তন শেষ ---
-
+        const newUser = { fullName, email: email.toLowerCase(), username: username.toLowerCase(), password: hashedPassword, role: 'user', status: 'pending', profilePictureUrl: "", bio: "", createdAt: new Date() };
         await usersCollection.insertOne(newUser);
-        res.status(201).json({ success: true, message: "রেজিস্ট্রেশন সফল হয়েছে! অ্যাডমিনের অনুমোদনের জন্য অপেক্ষা করুন।" });
-    } catch (error) {
-        res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" });
-    }
+        res.status(201).json({ success: true, message: "রেজিস্ট্রেশন সফল! অ্যাডমিনের অনুমোদনের জন্য অপেক্ষা করুন।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
 app.post('/login', async (req, res) => {
     try {
         const { identifier, password } = req.body;
-        if (!identifier || !password) {
-            return res.status(400).json({ success: false, message: "অনুগ্রহ করে ইউজারনেম/ইমেল এবং পাসওয়ার্ড দিন।" });
-        }
+        if (!identifier || !password) return res.status(400).json({ success: false, message: "অনুগ্রহ করে সঠিক তথ্য দিন।" });
         const user = await usersCollection.findOne({ $or: [{ email: identifier.toLowerCase() }, { username: identifier.toLowerCase() }] });
-        if (!user) {
-            return res.status(404).json({ success: false, message: "এই ইউজারনেম বা ইমেল দিয়ে কোনো অ্যাকাউন্ট খুঁজে পাওয়া যায়নি।" });
-        }
+        if (!user) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ success: false, message: "ভুল পাসওয়ার্ড।" });
-        }
-        
-        // --- নতুন পরিবর্তন এখানে ---
-        // অনুমোদনের জন্য এখন আর এখানে বাধা দেওয়া হবে না, কারণ pending ব্যবহারকারীও তার প্রোফাইল দেখবে
-        // if (user.status !== 'approved') {
-        //     return res.status(403).json({ success: false, message: "আপনার অ্যাকাউন্টটি এখনও অনুমোদিত হয়নি।" });
-        // }
+        if (!isMatch) return res.status(401).json({ success: false, message: "ভুল পাসওয়ার্ড।" });
 
-        const accessToken = jwt.sign(
-            { 
-              email: user.email, 
-              role: user.role, 
-              fullName: user.fullName, 
-              username: user.username,
-              status: user.status // <-- ব্যবহারকারীর স্ট্যাটাসও টোকেনে যোগ করা হলো
-            },
-            JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-        
-        res.status(200).json({
-            success: true,
-            message: "লগইন সফল হয়েছে!",
-            token: accessToken,
-        });
-        // --- পরিবর্তন শেষ ---
-
-    } catch (error) {
-        res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" });
-    }
+        const accessToken = jwt.sign({ userId: user._id, email: user.email, role: user.role, fullName: user.fullName, username: user.username, status: user.status }, JWT_SECRET, { expiresIn: '7d' });
+        res.status(200).json({ success: true, message: "লগইন সফল!", token: accessToken });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
+// --- নতুন API এন্ডপয়েন্ট ---
+app.get('/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
+        res.status(200).json({ success: true, users: pendingUsers });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.post('/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { status: 'approved' } });
+        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে অনুমোদন করা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.delete('/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
+        if (result.deletedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে মুছে ফেলা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
 
 async function startServer() {
     await connectDB();
     await setupAdminAccount();
-    server.listen(port, () => {
-        console.log(`Yaariyan Game Server is live on port ${port}`);
-    });
+    server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
 }
-
 startServer();
