@@ -57,6 +57,17 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+const authorizeAdminOrCoLeader = async (req, res, next) => {
+    try {
+        const userInDb = await usersCollection.findOne({ email: req.user.email });
+        if (userInDb && (userInDb.role === 'admin' || userInDb.role === 'co-leader')) {
+            next();
+        } else { res.status(403).json({ success: false, message: "এই কাজটি করার জন্য আপনার অনুমতি নেই।" }); }
+    } catch (error) { res.status(500).json({ success: false, message: "অনুমতি যাচাই করার সময় সার্ভারে সমস্যা হয়েছে।" }); }
+};
+
+app.get('/', (req, res) => res.json({ success: true, message: 'Welcome to Yaariyan Game Server!' }));
+
 app.post('/register', async (req, res) => {
     try {
         const { fullName, email, password, username } = req.body;
@@ -84,20 +95,15 @@ app.post('/login', async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
-// --- নতুন API: প্রোফাইল তথ্য পাওয়ার জন্য ---
 app.get('/get-profile', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.userId;
-        const userProfile = await usersCollection.findOne(
-            { _id: new ObjectId(userId) },
-            { projection: { password: 0, _id: 0 } } // পাসওয়ার্ড এবং আইডি ছাড়া বাকি সব তথ্য পাঠানো হচ্ছে
-        );
+        const userProfile = await usersCollection.findOne({ _id: new ObjectId(userId) }, { projection: { password: 0 } });
         if (!userProfile) return res.status(404).json({ success: false, message: "প্রোফাইল খুঁজে পাওয়া যায়নি।" });
         res.status(200).json({ success: true, profile: userProfile });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
-// --- নতুন API: প্রোফাইল আপডেট করার জন্য ---
 app.post('/update-profile', authenticateToken, async (req, res) => {
     try {
         const { fullName, bio } = req.body;
@@ -108,6 +114,31 @@ app.post('/update-profile', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" }); }
 });
 
+// --- অনুমোদন ব্যবস্থার জন্য অনুপস্থিত API গুলি এখানে যোগ করা হলো ---
+app.get('/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
+        res.status(200).json({ success: true, users: pendingUsers });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.post('/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { status: 'approved' } });
+        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে অনুমোদন করা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.delete('/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
+        if (result.deletedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে মুছে ফেলা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
 
 async function startServer() {
     await connectDB();
