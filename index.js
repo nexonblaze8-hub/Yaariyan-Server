@@ -4,7 +4,7 @@ const { Server } = require("socket.io");
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken'); // <-- jwt যোগ করা আছে
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const server = http.createServer(app);
@@ -15,7 +15,7 @@ app.use(cors());
 app.use(express.json());
 
 const uri = process.env.MONGO_URI;
-const JWT_SECRET = process.env.JWT_SECRET || 'your-default-super-secret-key-for-yaariyan'; // <-- কী যোগ করা আছে
+const JWT_SECRET = process.env.JWT_SECRET || 'your-default-super-secret-key-for-yaariyan';
 
 if (!uri) {
     console.error("MONGO_URI environment variable not set.");
@@ -52,6 +52,8 @@ async function setupAdminAccount() {
                 password: hashedPassword,
                 role: 'admin',
                 status: 'approved',
+                profilePictureUrl: "https://i.ibb.co/L1LQtBm/admin-avatar.png", // একটি ডিফল্ট অ্যাডমিন ছবি
+                bio: "Yaariyan App-এর অ্যাডমিনিস্ট্রেটর।",
                 createdAt: new Date()
             };
             await usersCollection.insertOne(newAdmin);
@@ -79,6 +81,8 @@ app.post('/register', async (req, res) => {
         }
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
+        
+        // --- নতুন পরিবর্তন এখানে ---
         const newUser = {
             fullName,
             email: email.toLowerCase(),
@@ -86,8 +90,12 @@ app.post('/register', async (req, res) => {
             password: hashedPassword,
             role: 'user',
             status: 'pending',
+            profilePictureUrl: "", // <-- প্রোফাইল ছবির জন্য খালি জায়গা
+            bio: "",                 // <-- বায়োর জন্য খালি জায়গা
             createdAt: new Date()
         };
+        // --- পরিবর্তন শেষ ---
+
         await usersCollection.insertOne(newUser);
         res.status(201).json({ success: true, message: "রেজিস্ট্রেশন সফল হয়েছে! অ্যাডমিনের অনুমোদনের জন্য অপেক্ষা করুন।" });
     } catch (error) {
@@ -95,7 +103,6 @@ app.post('/register', async (req, res) => {
     }
 });
 
-// --- সঠিক লগইন ফাংশন এখানে ---
 app.post('/login', async (req, res) => {
     try {
         const { identifier, password } = req.body;
@@ -110,29 +117,36 @@ app.post('/login', async (req, res) => {
         if (!isMatch) {
             return res.status(401).json({ success: false, message: "ভুল পাসওয়ার্ড।" });
         }
-        if (user.status !== 'approved') {
-            return res.status(403).json({ success: false, message: "আপনার অ্যাকাউন্টটি এখনও অনুমোদিত হয়নি।" });
-        }
+        
+        // --- নতুন পরিবর্তন এখানে ---
+        // অনুমোদনের জন্য এখন আর এখানে বাধা দেওয়া হবে না, কারণ pending ব্যবহারকারীও তার প্রোফাইল দেখবে
+        // if (user.status !== 'approved') {
+        //     return res.status(403).json({ success: false, message: "আপনার অ্যাকাউন্টটি এখনও অনুমোদিত হয়নি।" });
+        // }
 
-        // টোকেন তৈরি করার সঠিক কোড
         const accessToken = jwt.sign(
-            { email: user.email, role: user.role, fullName: user.fullName, username: user.username },
+            { 
+              email: user.email, 
+              role: user.role, 
+              fullName: user.fullName, 
+              username: user.username,
+              status: user.status // <-- ব্যবহারকারীর স্ট্যাটাসও টোকেনে যোগ করা হলো
+            },
             JWT_SECRET,
             { expiresIn: '7d' }
         );
-
-        // টোকেন পাঠানোর সঠিক কোড
+        
         res.status(200).json({
             success: true,
             message: "লগইন সফল হয়েছে!",
             token: accessToken,
         });
+        // --- পরিবর্তন শেষ ---
 
     } catch (error) {
         res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" });
     }
 });
-// --- সঠিক লগইন ফাংশন শেষ ---
 
 
 async function startServer() {
