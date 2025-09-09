@@ -88,8 +88,15 @@ app.post('/login', async (req, res) => {
         if (!identifier || !password) return res.status(400).json({ success: false, message: "অনুগ্রহ করে সঠিক তথ্য দিন।" });
         const user = await usersCollection.findOne({ $or: [{ email: identifier.toLowerCase() }, { username: identifier.toLowerCase() }] });
         if (!user) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        
+        // লগইন করার আগে স্ট্যাটাস চেক করা
+        if (user.status !== 'approved') {
+            return res.status(403).json({ success: false, message: "আপনার অ্যাকাউন্টটি এখনও অনুমোদিত হয়নি।" });
+        }
+
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ success: false, message: "ভুল পাসওয়ার্ড।" });
+
         const accessToken = jwt.sign({ userId: user._id.toString(), email: user.email, role: user.role, fullName: user.fullName, username: user.username, status: user.status }, JWT_SECRET, { expiresIn: '7d' });
         res.status(200).json({ success: true, message: "লগইন সফল!", token: accessToken });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
@@ -108,30 +115,38 @@ app.post('/update-profile', authenticateToken, async (req, res) => {
     try {
         const { fullName, bio } = req.body;
         const userId = req.user.userId;
-        if (!fullName) return res.status(400).json({ success: false, message: "সম্পূর্ণ নাম आवश्यक।" });
-        await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { fullName, bio } });
+        // fullName ঐচ্ছিক হতে পারে, তাই এটি না থাকলে আপডেট করার চেষ্টা করা হবে না
+        const updateData = {};
+        if (fullName) updateData.fullName = fullName;
+        if (bio !== undefined) updateData.bio = bio; // bio خالی স্ট্রিংও হতে পারে
+
+        if (Object.keys(updateData).length === 0) {
+            return res.status(400).json({ success: false, message: "কোনো তথ্য পরিবর্তন করা হয়নি।" });
+        }
+
+        await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: updateData });
         res.status(200).json({ success: true, message: "প্রোফাইল সফলভাবে আপডেট করা হয়েছে।" });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" }); }
 });
 
-// --- অনুমোদন ব্যবস্থার জন্য অনুপস্থিত API গুলি এখানে যোগ করা হলো ---
-app.get('/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+// --- অনুমোদন ব্যবস্থার জন্য নতুন API গুলি ---
+app.get('/admin/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
     try {
         const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
         res.status(200).json({ success: true, users: pendingUsers });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
-app.post('/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+app.post('/admin/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
     try {
         const { userId } = req.params;
         const result = await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { status: 'approved' } });
-        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি বা ইতিমধ্যেই অনুমোদিত।" });
         res.status(200).json({ success: true, message: "ব্যবহারকারীকে অনুমোদন করা হয়েছে।" });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
-app.delete('/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+app.delete('/admin/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
     try {
         const { userId } = req.params;
         const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
@@ -145,4 +160,5 @@ async function startServer() {
     await setupAdminAccount();
     server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
 }
+
 startServer();
