@@ -8,7 +8,13 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const server = http.createServer(app);
-io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+const io = new Server(server, { 
+    cors: { 
+        origin: "*", 
+        methods: ["GET", "POST"] 
+    },
+    transports: ['websocket', 'polling']
+});
 
 const port = process.env.PORT || 3000;
 app.use(cors());
@@ -21,6 +27,8 @@ if (!uri) { console.error("MONGO_URI environment variable not set."); process.ex
 const client = new MongoClient(uri, { serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true } });
 
 let db, usersCollection;
+let onlineUsers = new Map(); // socket.id => userId
+
 async function connectDB() {
     try {
         await client.connect();
@@ -30,6 +38,31 @@ async function connectDB() {
     } catch (err) { console.error("Failed to connect to MongoDB", err); process.exit(1); }
 }
 
+io.on('connection', (socket) => {
+    console.log(`User connected with socket ID: ${socket.id}`);
+
+    // ব্যবহারকারী যখন নিজেকে অনলাইন হিসেবে ঘোষণা করে
+    socket.on('user_online', (userId) => {
+        if(userId) {
+            onlineUsers.set(socket.id, userId);
+            console.log(`User ${userId} is now online. Total online: ${onlineUsers.size}`);
+            // সমস্ত কানেক্টেড ক্লায়েন্টকে নতুন অনলাইন তালিকা পাঠান
+            io.emit('update_online_users', Array.from(onlineUsers.values()));
+        }
+    });
+
+    socket.on('disconnect', () => {
+        if(onlineUsers.has(socket.id)){
+            console.log(`User ${onlineUsers.get(socket.id)} disconnected with socket ID: ${socket.id}`);
+            onlineUsers.delete(socket.id);
+            // সমস্ত কানেক্টেড ক্লায়েন্টকে নতুন অনলাইন তালিকা পাঠান
+            io.emit('update_online_users', Array.from(onlineUsers.values()));
+        }
+    });
+});
+
+// আপনার বাকি সমস্ত কোড অপরিবর্তিত থাকবে
+// ... (setupAdminAccount, authenticateToken, all API endpoints)
 async function setupAdminAccount() {
     const ADMIN_USERNAME = "Mtr@rkS";
     const ADMIN_PASSWORD = "264148";
@@ -66,7 +99,6 @@ const authorizeAdminOrCoLeader = async (req, res, next) => {
     } catch (error) { res.status(500).json({ success: false, message: "অনুমতি যাচাই করার সময় সার্ভারে সমস্যা হয়েছে।" }); }
 };
 
-// --- API Endpoints ---
 app.get('/', (req, res) => res.json({ success: true, message: 'Welcome to Yaariyan Game Server!' }));
 
 app.post('/register', async (req, res) => {
@@ -114,9 +146,7 @@ app.post('/update-profile', authenticateToken, async (req, res) => {
         if (bio !== undefined) updateData.bio = bio;
         if (profilePictureUrl) updateData.profilePictureUrl = profilePictureUrl;
         if (coverPhotoUrl) updateData.coverPhotoUrl = coverPhotoUrl;
-
         if (Object.keys(updateData).length === 0) return res.status(400).json({ success: false, message: "কোনো তথ্য পরিবর্তন করা হয়নি।" });
-        
         await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: updateData });
         res.status(200).json({ success: true, message: "প্রোফাইল সফলভাবে আপডেট করা হয়েছে।" });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" }); }
@@ -152,4 +182,5 @@ async function startServer() {
     await setupAdminAccount();
     server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
 }
+
 startServer();
