@@ -8,7 +8,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
 const port = process.env.PORT || 3000;
 app.use(cors());
@@ -39,7 +39,7 @@ async function setupAdminAccount() {
             console.log("Admin account not found. Creating a new one...");
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt);
-            const newAdmin = { fullName: "MTR (Admin)", email: "admin@yaariyan.local", username: ADMIN_USERNAME.toLowerCase(), password: hashedPassword, role: 'admin', status: 'approved', profilePictureUrl: "", bio: "Yaariyan App-এর অ্যাডমিনিস্ট্রেটর।", createdAt: new Date() };
+            const newAdmin = { fullName: "MTR (Admin)", email: "admin@yaariyan.local", username: ADMIN_USERNAME.toLowerCase(), password: hashedPassword, role: 'admin', status: 'approved', profilePictureUrl: "", coverPhotoUrl: "", bio: "Yaariyan App-এর অ্যাডমিনিস্ট্রেটর।", createdAt: new Date() };
             await usersCollection.insertOne(newAdmin);
             console.log("Admin account created successfully!");
         } else { console.log("Admin account verified."); }
@@ -66,6 +66,7 @@ const authorizeAdminOrCoLeader = async (req, res, next) => {
     } catch (error) { res.status(500).json({ success: false, message: "অনুমতি যাচাই করার সময় সার্ভারে সমস্যা হয়েছে।" }); }
 };
 
+// --- API Endpoints ---
 app.get('/', (req, res) => res.json({ success: true, message: 'Welcome to Yaariyan Game Server!' }));
 
 app.post('/register', async (req, res) => {
@@ -88,24 +89,18 @@ app.post('/login', async (req, res) => {
         if (!identifier || !password) return res.status(400).json({ success: false, message: "অনুগ্রহ করে সঠিক তথ্য দিন।" });
         const user = await usersCollection.findOne({ $or: [{ email: identifier.toLowerCase() }, { username: identifier.toLowerCase() }] });
         if (!user) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
-        if (user.status !== 'approved') {
-            return res.status(403).json({ success: false, message: "আপনার অ্যাকাউন্টটি এখনও অনুমোদিত হয়নি।" });
-        }
+        if (user.status !== 'approved') return res.status(403).json({ success: false, message: "আপনার অ্যাকাউন্টটি এখনও অনুমোদিত হয়নি।" });
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ success: false, message: "ভুল পাসওয়ার্ড।" });
-
-        // ফ্রন্টএন্ডের parseJwt ফাংশনের জন্য সামঞ্জস্যপূর্ণ টোকেন
         const userPayload = { userId: user._id.toString(), email: user.email, role: user.role, fullName: user.fullName, username: user.username };
         const accessToken = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '7d' });
-        
         res.status(200).json({ success: true, message: "লগইন সফল!", token: accessToken });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
 app.get('/get-profile', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.userId;
-        const userProfile = await usersCollection.findOne({ _id: new ObjectId(userId) }, { projection: { password: 0 } });
+        const userProfile = await usersCollection.findOne({ _id: new ObjectId(req.user.userId) }, { projection: { password: 0 } });
         if (!userProfile) return res.status(404).json({ success: false, message: "প্রোফাইল খুঁজে পাওয়া যায়নি।" });
         res.status(200).json({ success: true, profile: userProfile });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
@@ -113,14 +108,15 @@ app.get('/get-profile', authenticateToken, async (req, res) => {
 
 app.post('/update-profile', authenticateToken, async (req, res) => {
     try {
-        const { bio } = req.body;
+        const { bio, profilePictureUrl, coverPhotoUrl } = req.body;
         const userId = req.user.userId;
         const updateData = {};
         if (bio !== undefined) updateData.bio = bio;
+        if (profilePictureUrl) updateData.profilePictureUrl = profilePictureUrl;
+        if (coverPhotoUrl) updateData.coverPhotoUrl = coverPhotoUrl;
 
-        if (Object.keys(updateData).length === 0) {
-            return res.status(400).json({ success: false, message: "কোনো তথ্য পরিবর্তন করা হয়নি।" });
-        }
+        if (Object.keys(updateData).length === 0) return res.status(400).json({ success: false, message: "কোনো তথ্য পরিবর্তন করা হয়নি।" });
+        
         await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: updateData });
         res.status(200).json({ success: true, message: "প্রোফাইল সফলভাবে আপডেট করা হয়েছে।" });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" }); }
@@ -156,5 +152,4 @@ async function startServer() {
     await setupAdminAccount();
     server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
 }
-
 startServer();
