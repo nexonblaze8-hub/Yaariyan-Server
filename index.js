@@ -59,7 +59,7 @@ const authenticateToken = (req, res, next) => {
 
 const authorizeAdminOrCoLeader = async (req, res, next) => {
     try {
-        const userInDb = await usersCollection.findOne({ email: req.user.email });
+        const userInDb = await usersCollection.findOne({ _id: new ObjectId(req.user.userId) });
         if (userInDb && (userInDb.role === 'admin' || userInDb.role === 'co-leader')) {
             next();
         } else { res.status(403).json({ success: false, message: "এই কাজটি করার জন্য আপনার অনুমতি নেই।" }); }
@@ -76,7 +76,7 @@ app.post('/register', async (req, res) => {
         if (existingUser) return res.status(400).json({ success: false, message: "এই ইমেল বা ইউজারনেমটি ব্যবহৃত হয়েছে।" });
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
-        const newUser = { fullName, email: email.toLowerCase(), username: username.toLowerCase(), password: hashedPassword, role: 'user', status: 'pending', profilePictureUrl: "", bio: "", createdAt: new Date() };
+        const newUser = { fullName, email: email.toLowerCase(), username: username.toLowerCase(), password: hashedPassword, role: 'user', status: 'pending', profilePictureUrl: "", coverPhotoUrl: "", bio: "", createdAt: new Date() };
         await usersCollection.insertOne(newUser);
         res.status(201).json({ success: true, message: "রেজিস্ট্রেশন সফল! অ্যাডমিনের অনুমোদনের জন্য অপেক্ষা করুন।" });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
@@ -88,16 +88,16 @@ app.post('/login', async (req, res) => {
         if (!identifier || !password) return res.status(400).json({ success: false, message: "অনুগ্রহ করে সঠিক তথ্য দিন।" });
         const user = await usersCollection.findOne({ $or: [{ email: identifier.toLowerCase() }, { username: identifier.toLowerCase() }] });
         if (!user) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
-        
-        // লগইন করার আগে স্ট্যাটাস চেক করা
         if (user.status !== 'approved') {
             return res.status(403).json({ success: false, message: "আপনার অ্যাকাউন্টটি এখনও অনুমোদিত হয়নি।" });
         }
-
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ success: false, message: "ভুল পাসওয়ার্ড।" });
 
-        const accessToken = jwt.sign({ userId: user._id.toString(), email: user.email, role: user.role, fullName: user.fullName, username: user.username, status: user.status }, JWT_SECRET, { expiresIn: '7d' });
+        // ফ্রন্টএন্ডের parseJwt ফাংশনের জন্য সামঞ্জস্যপূর্ণ টোকেন
+        const userPayload = { userId: user._id.toString(), email: user.email, role: user.role, fullName: user.fullName, username: user.username };
+        const accessToken = jwt.sign(userPayload, JWT_SECRET, { expiresIn: '7d' });
+        
         res.status(200).json({ success: true, message: "লগইন সফল!", token: accessToken });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
@@ -113,23 +113,19 @@ app.get('/get-profile', authenticateToken, async (req, res) => {
 
 app.post('/update-profile', authenticateToken, async (req, res) => {
     try {
-        const { fullName, bio } = req.body;
+        const { bio } = req.body;
         const userId = req.user.userId;
-        // fullName ঐচ্ছিক হতে পারে, তাই এটি না থাকলে আপডেট করার চেষ্টা করা হবে না
         const updateData = {};
-        if (fullName) updateData.fullName = fullName;
-        if (bio !== undefined) updateData.bio = bio; // bio خالی স্ট্রিংও হতে পারে
+        if (bio !== undefined) updateData.bio = bio;
 
         if (Object.keys(updateData).length === 0) {
             return res.status(400).json({ success: false, message: "কোনো তথ্য পরিবর্তন করা হয়নি।" });
         }
-
         await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: updateData });
         res.status(200).json({ success: true, message: "প্রোফাইল সফলভাবে আপডেট করা হয়েছে।" });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" }); }
 });
 
-// --- অনুমোদন ব্যবস্থার জন্য নতুন API গুলি ---
 app.get('/admin/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
     try {
         const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
