@@ -8,10 +8,10 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
+const io = new Server(server, { 
+    cors: { 
+        origin: "*", 
+        methods: ["GET", "POST"] 
     },
     transports: ['websocket', 'polling']
 });
@@ -26,16 +26,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-default-super-secret-key-for-
 if (!uri) { console.error("MONGO_URI environment variable not set."); process.exit(1); }
 const client = new MongoClient(uri, { serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true } });
 
-let db, usersCollection, gamesCollection, ledgerCollection;
-let onlineUsers = new Map();
+let db, usersCollection;
+let onlineUsers = new Map(); // socket.id => userId
 
 async function connectDB() {
     try {
         await client.connect();
         db = client.db("YaariyanGameDB");
         usersCollection = db.collection("users");
-        gamesCollection = db.collection("games");
-        ledgerCollection = db.collection("ledger");
         console.log("MongoDB connection successful!");
     } catch (err) { console.error("Failed to connect to MongoDB", err); process.exit(1); }
 }
@@ -43,23 +41,28 @@ async function connectDB() {
 io.on('connection', (socket) => {
     console.log(`User connected with socket ID: ${socket.id}`);
 
+    // ব্যবহারকারী যখন নিজেকে অনলাইন হিসেবে ঘোষণা করে
     socket.on('user_online', (userId) => {
-        if (userId) {
+        if(userId) {
             onlineUsers.set(socket.id, userId);
             console.log(`User ${userId} is now online. Total online: ${onlineUsers.size}`);
+            // সমস্ত কানেক্টেড ক্লায়েন্টকে নতুন অনলাইন তালিকা পাঠান
             io.emit('update_online_users', Array.from(onlineUsers.values()));
         }
     });
 
     socket.on('disconnect', () => {
-        if (onlineUsers.has(socket.id)) {
+        if(onlineUsers.has(socket.id)){
             console.log(`User ${onlineUsers.get(socket.id)} disconnected with socket ID: ${socket.id}`);
             onlineUsers.delete(socket.id);
+            // সমস্ত কানেক্টেড ক্লায়েন্টকে নতুন অনলাইন তালিকা পাঠান
             io.emit('update_online_users', Array.from(onlineUsers.values()));
         }
     });
 });
 
+// আপনার বাকি সমস্ত কোড অপরিবর্তিত থাকবে
+// ... (setupAdminAccount, authenticateToken, all API endpoints)
 async function setupAdminAccount() {
     const ADMIN_USERNAME = "Mtr@rkS";
     const ADMIN_PASSWORD = "264148";
@@ -78,13 +81,10 @@ async function setupAdminAccount() {
 
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' '); // Correctly get the token part
+    const token = authHeader && authHeader.split(' ');
     if (token == null) return res.status(401).json({ success: false, message: 'Token not provided' });
-
     jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) {
-            return res.status(403).json({ success: false, message: 'Token is invalid' });
-        }
+        if (err) return res.status(403).json({ success: false, message: 'Token is invalid' });
         req.user = user;
         next();
     });
@@ -105,7 +105,7 @@ app.post('/register', async (req, res) => {
     try {
         const { fullName, email, password, username } = req.body;
         if (!fullName || !email || !password || !username) return res.status(400).json({ success: false, message: "সম্পূর্ণ তথ্য দিন।" });
-        const existingUser = await usersCollection.findOne({ $or: [{ email: email.toLowerCase() }, { username: username.toLowerCase() }] });
+        const existingUser = await usersCollection.findOne({ $or: [{email: email.toLowerCase()}, {username: username.toLowerCase()}] });
         if (existingUser) return res.status(400).json({ success: false, message: "এই ইমেল বা ইউজারনেমটি ব্যবহৃত হয়েছে।" });
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
@@ -152,51 +152,38 @@ app.post('/update-profile', authenticateToken, async (req, res) => {
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে একটি সমস্যা হয়েছে।" }); }
 });
 
-app.post('/games/create', authenticateToken, async (req, res) => {
-    try {
-        const { gameType, players } = req.body;
-        const host = req.user;
-
-        if (!gameType || !players || !Array.isArray(players)) {
-            return res.status(400).json({ success: false, message: "অনুগ্রহ করে খেলার ধরন এবং খেলোয়াড়দের ইউজারনেম দিন।" });
-        }
-
-        const allUsernames = [host.username, ...players];
-        const playerDetails = await usersCollection.find({ username: { $in: allUsernames } }).project({ password: 0 }).toArray();
-
-        const foundUsernames = playerDetails.map(p => p.username);
-        const notFoundUsernames = allUsernames.filter(u => !foundUsernames.includes(u));
-
-        if (notFoundUsernames.length > 0) {
-            return res.status(404).json({ success: false, message: `এই খেলোয়াড়দের খুঁজে পাওয়া যায়নি: ${notFoundUsernames.join(', ')}` });
-        }
-
-        const newGame = {
-            type: gameType,
-            host: { id: host.userId, username: host.username },
-            players: playerDetails.map((p, index) => ({ id: p._id.toString(), username: p.username, seat: index + 1 })),
-            status: 'pending',
-            rounds: [],
-            finalResult: [],
-            sharedBill: 0,
-            personalOrders: [],
-            createdAt: new Date()
-        };
-
-        const result = await gamesCollection.insertOne(newGame);
-        const insertedGame = await gamesCollection.findOne({ _id: result.insertedId });
-
-        res.status(201).json({ success: true, message: `${gameType} খেলাটি সফলভাবে তৈরি হয়েছে!`, game: insertedGame });
-
-    } catch (error) {
-        console.error("Error creating game:", error);
-        res.status(500).json({ success: false, message: "খেলা তৈরি করার সময় সার্ভারে সমস্যা হয়েছে।" });
-    }
-});
-
 app.get('/admin/pending-users', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
     try {
         const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
+        res.status(200).json({ success: true, users: pendingUsers });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.post('/admin/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { status: 'approved' } });
+        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি বা ইতিমধ্যেই অনুমোদিত।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে অনুমোদন করা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.delete('/admin/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
+        if (result.deletedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে মুছে ফেলা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+async function startServer() {
+    await connectDB();
+    await setupAdminAccount();
+    server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
+}
+
+startServer();t({ password: 0 }).toArray();
         res.status(200).json({ success: true, users: pendingUsers });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
