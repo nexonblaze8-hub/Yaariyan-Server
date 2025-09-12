@@ -222,4 +222,33 @@ async function startServer() {
     server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
 }
 
+startServer();).toArray();
+        res.status(200).json({ success: true, users: pendingUsers });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.post('/admin/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { status: 'approved' } });
+        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি বা ইতিমধ্যেই অনুমোদিত।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে অনুমোদন করা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.delete('/admin/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
+        if (result.deletedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে মুছে ফেলা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+async function startServer() {
+    await connectDB();
+    await setupAdminAccount();
+    server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
+}
+
 startServer();
