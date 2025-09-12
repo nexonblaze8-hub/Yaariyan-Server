@@ -42,6 +42,7 @@ async function connectDB() {
 
 io.on('connection', (socket) => {
     console.log(`User connected with socket ID: ${socket.id}`);
+
     socket.on('user_online', (userId) => {
         if (userId) {
             onlineUsers.set(socket.id, userId);
@@ -49,6 +50,7 @@ io.on('connection', (socket) => {
             io.emit('update_online_users', Array.from(onlineUsers.values()));
         }
     });
+
     socket.on('disconnect', () => {
         if (onlineUsers.has(socket.id)) {
             console.log(`User ${onlineUsers.get(socket.id)} disconnected with socket ID: ${socket.id}`);
@@ -76,8 +78,9 @@ async function setupAdminAccount() {
 
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ');
+    const token = authHeader && authHeader.split(' '); // Correctly get the token part
     if (token == null) return res.status(401).json({ success: false, message: 'Token not provided' });
+
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) {
             return res.status(403).json({ success: false, message: 'Token is invalid' });
@@ -153,16 +156,21 @@ app.post('/games/create', authenticateToken, async (req, res) => {
     try {
         const { gameType, players } = req.body;
         const host = req.user;
+
         if (!gameType || !players || !Array.isArray(players)) {
             return res.status(400).json({ success: false, message: "অনুগ্রহ করে খেলার ধরন এবং খেলোয়াড়দের ইউজারনেম দিন।" });
         }
+
         const allUsernames = [host.username, ...players];
         const playerDetails = await usersCollection.find({ username: { $in: allUsernames } }).project({ password: 0 }).toArray();
+
         const foundUsernames = playerDetails.map(p => p.username);
         const notFoundUsernames = allUsernames.filter(u => !foundUsernames.includes(u));
+
         if (notFoundUsernames.length > 0) {
             return res.status(404).json({ success: false, message: `এই খেলোয়াড়দের খুঁজে পাওয়া যায়নি: ${notFoundUsernames.join(', ')}` });
         }
+
         const newGame = {
             type: gameType,
             host: { id: host.userId, username: host.username },
@@ -174,9 +182,12 @@ app.post('/games/create', authenticateToken, async (req, res) => {
             personalOrders: [],
             createdAt: new Date()
         };
+
         const result = await gamesCollection.insertOne(newGame);
         const insertedGame = await gamesCollection.findOne({ _id: result.insertedId });
+
         res.status(201).json({ success: true, message: `${gameType} খেলাটি সফলভাবে তৈরি হয়েছে!`, game: insertedGame });
+
     } catch (error) {
         console.error("Error creating game:", error);
         res.status(500).json({ success: false, message: "খেলা তৈরি করার সময় সার্ভারে সমস্যা হয়েছে।" });
@@ -187,6 +198,34 @@ app.get('/admin/pending-users', authenticateToken, authorizeAdminOrCoLeader, asy
     try {
         const pendingUsers = await usersCollection.find({ status: 'pending' }).project({ password: 0 }).toArray();
         res.status(200).json({ success: true, users: pendingUsers });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.post('/admin/approve-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: { status: 'approved' } });
+        if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি বা ইতিমধ্যেই অনুমোদিত।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে অনুমোদন করা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+app.delete('/admin/reject-user/:userId', authenticateToken, authorizeAdminOrCoLeader, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
+        if (result.deletedCount === 0) return res.status(404).json({ success: false, message: "ব্যবহারকারীকে খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, message: "ব্যবহারকারীকে মুছে ফেলা হয়েছে।" });
+    } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
+});
+
+async function startServer() {
+    await connectDB();
+    await setupAdminAccount();
+    server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
+}
+
+startServer();tatus(200).json({ success: true, users: pendingUsers });
     } catch (error) { res.status(500).json({ success: false, message: "সার্ভারে সমস্যা হয়েছে।" }); }
 });
 
