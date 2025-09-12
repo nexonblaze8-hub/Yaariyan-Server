@@ -42,7 +42,6 @@ async function connectDB() {
 
 io.on('connection', (socket) => {
     console.log(`User connected with socket ID: ${socket.id}`);
-
     socket.on('user_online', (userId) => {
         if(userId) {
             onlineUsers.set(socket.id, userId);
@@ -50,7 +49,6 @@ io.on('connection', (socket) => {
             io.emit('update_online_users', Array.from(onlineUsers.values()));
         }
     });
-
     socket.on('disconnect', () => {
         if(onlineUsers.has(socket.id)){
             console.log(`User ${onlineUsers.get(socket.id)} disconnected with socket ID: ${socket.id}`);
@@ -153,21 +151,16 @@ app.post('/games/create', authenticateToken, async (req, res) => {
     try {
         const { gameType, players } = req.body;
         const host = req.user;
-
         if (!gameType || !players || !Array.isArray(players)) {
             return res.status(400).json({ success: false, message: "অনুগ্রহ করে খেলার ধরন এবং খেলোয়াড়দের ইউজারনেম দিন।" });
         }
-
         const allUsernames = [host.username, ...players];
         const playerDetails = await usersCollection.find({ username: { $in: allUsernames } }).project({ password: 0 }).toArray();
-
         const foundUsernames = playerDetails.map(p => p.username);
         const notFoundUsernames = allUsernames.filter(u => !foundUsernames.includes(u));
-
         if (notFoundUsernames.length > 0) {
             return res.status(404).json({ success: false, message: `এই খেলোয়াড়দের খুঁজে পাওয়া যায়নি: ${notFoundUsernames.join(', ')}` });
         }
-
         const newGame = {
             type: gameType,
             host: { id: host.userId, username: host.username },
@@ -179,12 +172,9 @@ app.post('/games/create', authenticateToken, async (req, res) => {
             personalOrders: [],
             createdAt: new Date()
         };
-
         const result = await gamesCollection.insertOne(newGame);
         const insertedGame = await gamesCollection.findOne({ _id: result.insertedId });
-
         res.status(201).json({ success: true, message: `${gameType} খেলাটি সফলভাবে তৈরি হয়েছে!`, game: insertedGame });
-
     } catch (error) {
         console.error("Error creating game:", error);
         res.status(500).json({ success: false, message: "খেলা তৈরি করার সময় সার্ভারে সমস্যা হয়েছে।" });
