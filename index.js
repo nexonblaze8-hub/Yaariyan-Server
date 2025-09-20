@@ -236,4 +236,88 @@ app.get('/get-game-state/:roomId', authenticateToken, async (req, res) => {
         res.status(500).json({ success: false, message: "গেম স্টেট লোড করতে সমস্যা হয়েছে।" });
     }
 });
+// 4. Start Game & Deal Cards
+app.post('/start-game/:roomId', authenticateToken, async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const room = gameRooms.get(roomId);
+        if (!room) return res.status(404).json({ success: false, message: "রুম খুঁজে পাওয়া যায়নি।" });
+        if (room.players.length < 4) return res.status(400).json({ success: false, message: "খেলা শুরু করতে কমপক্ষে ৪ জন প্রয়োজন।" });
+        if (room.gameState.status !== 'waiting') return res.status(400).json({ success: false, message: "খেলা ইতিমধ্যে শুরু হয়েছে।" });
+
+        // তাস তৈরি করুন
+        const suits = ['♠️', '♥️', '♦️', '♣️'];
+        const values = ['A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3', '2'];
+        let deck = [];
+        for (let suit of suits) {
+            for (let value of values) {
+                deck.push({ suit, value, point: ['A', 'K', 'Q', 'J', '10'].includes(value) ? 10 : 5 });
+            }
+        }
+
+        // তাস মিশিয়ে নিন
+        for (let i = deck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [deck[i], deck[j]] = [deck[j], deck[i]];
+        }
+
+        // প্রত্যেক খেলোয়াড়কে ১৩টি করে তাস দিন
+        room.players.forEach((player, index) => {
+            const start = index * 13;
+            room.gameState.cards[player.userId] = deck.slice(start, start + 13);
+            room.gameState.scores[player.userId] = 0;
+            room.gameState.combinations[player.userId] = [];
+        });
+
+        room.gameState.status = 'playing';
+        room.gameState.currentPlayerIndex = 0;
+
+        res.status(200).json({ success: true, message: "খেলা শুরু হয়েছে!", gameState: room.gameState });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "খেলা শুরু করতে সমস্যা হয়েছে।" });
+    }
+});
+
+// 5. Submit Combination (চাল জমা দেওয়া)
+app.post('/submit-combination', authenticateToken, async (req, res) => {
+    try {
+        const { roomId, combination } = req.body; // combination = { type: 'troy', cards: [...] }
+        const room = gameRooms.get(roomId);
+        if (!room) return res.status(404).json({ success: false, message: "রুম খুঁজে পাওয়া যায়নি।" });
+        if (room.gameState.status !== 'playing') return res.status(400).json({ success: false, message: "খেলা চলছে না।" });
+
+        const currentPlayer = room.players[room.gameState.currentPlayerIndex];
+        if (currentPlayer.userId !== req.user.userId) return res.status(400).json({ success: false, message: "এখন আপনার চাল নয়।" });
+
+        // সহজ ভাবে — কম্বিনেশন সেভ করুন
+        room.gameState.combinations[req.user.userId] = combination;
+
+        // পরবর্তী খেলোয়াড়ের কাছে যান
+        room.gameState.currentPlayerIndex = (room.gameState.currentPlayerIndex + 1) % 4;
+
+        // যদি সব ৪ জন চাল দিয়ে থাকে — রাউন্ড শেষ
+        if (Object.keys(room.gameState.combinations).length === 4) {
+            // সহজ ভাবে — সবার পয়েন্ট বাড়ান (পরে রিয়েল লজিক যোগ করবেন)
+            room.players.forEach(p => {
+                room.gameState.scores[p.userId] += 50; // ডামি পয়েন্ট
+            });
+
+            // গেম শেষ হয়েছে কিনা চেক করুন
+            for (let p of room.players) {
+                if (room.gameState.scores[p.userId] >= 1000) {
+                    room.gameState.status = 'finished';
+                    room.gameState.winner = p.username;
+                    break;
+                }
+            }
+
+            // কম্বিনেশন ক্লিয়ার করুন — পরের রাউন্ডের জন্য
+            room.gameState.combinations = {};
+        }
+
+        res.status(200).json({ success: true, message: "চাল জমা দেওয়া হয়েছে!", gameState: room.gameState });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "চাল জমা দিতে সমস্যা হয়েছে।" });
+    }
+});
 startServer();
