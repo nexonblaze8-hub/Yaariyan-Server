@@ -182,5 +182,58 @@ async function startServer() {
     await setupAdminAccount();
     server.listen(port, () => { console.log(`Yaariyan Game Server is live on port ${port}`); });
 }
+// ============= HAZARI GAME MODULE =============
+let gameRooms = new Map(); // roomId => { players: [], gameState: {}, createdAt: Date }
 
+// 1. Create Game Room
+app.post('/create-game-room', authenticateToken, async (req, res) => {
+    try {
+        const roomId = 'HZR-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+        const newRoom = {
+            roomId,
+            players: [{ userId: req.user.userId, username: req.user.username, socketId: null, ready: false }],
+            gameState: {
+                status: 'waiting', // waiting, playing, finished
+                currentRound: 1,
+                currentPlayerIndex: 0,
+                scores: {},
+                cards: {},
+                combinations: {},
+                winner: null
+            },
+            createdAt: new Date()
+        };
+        gameRooms.set(roomId, newRoom);
+        res.status(200).json({ success: true, roomId, message: "গেম রুম তৈরি হয়েছে!" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "রুম তৈরি করতে সমস্যা হয়েছে।" });
+    }
+});
+
+// 2. Join Game Room
+app.post('/join-game-room/:roomId', authenticateToken, async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const room = gameRooms.get(roomId);
+        if (!room) return res.status(404).json({ success: false, message: "রুম খুঁজে পাওয়া যায়নি।" });
+        if (room.players.length >= 4) return res.status(400).json({ success: false, message: "রুম পূর্ণ।" });
+        if (room.players.some(p => p.userId === req.user.userId)) return res.status(400).json({ success: false, message: "আপনি ইতিমধ্যে এই রুমে আছেন।" });
+        room.players.push({ userId: req.user.userId, username: req.user.username, socketId: null, ready: false });
+        res.status(200).json({ success: true, message: "রুমে যোগ দেওয়া হয়েছে!" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "রুমে যোগ দিতে সমস্যা হয়েছে।" });
+    }
+});
+
+// 3. Get Game State
+app.get('/get-game-state/:roomId', authenticateToken, async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const room = gameRooms.get(roomId);
+        if (!room) return res.status(404).json({ success: false, message: "রুম খুঁজে পাওয়া যায়নি।" });
+        res.status(200).json({ success: true, gameState: room });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "গেম স্টেট লোড করতে সমস্যা হয়েছে।" });
+    }
+});
 startServer();
