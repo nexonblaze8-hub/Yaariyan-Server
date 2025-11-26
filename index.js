@@ -8,7 +8,6 @@ const cheerio = require('cheerio');
 const qs = require('qs');
 const { wrapper } = require('axios-cookiejar-support');
 const { CookieJar } = require('tough-cookie');
-const UserAgent = require('fake-useragent');
 
 const app = express();
 const server = http.createServer(app);
@@ -28,12 +27,28 @@ const client = new MongoClient(uri, { serverApi: { version: ServerApiVersion.v1,
 
 let db, farmCollection;
 
+// === MOBILE HEADERS (ছদ্মবেশ) ===
+const MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36";
+const HEADERS = {
+    'User-Agent': MOBILE_UA,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'sec-ch-ua': '"Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116"',
+    'sec-ch-ua-mobile': '?1',
+    'sec-ch-ua-platform': '"Android"',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1'
+};
+
 async function connectDB() {
     try {
         await client.connect();
         db = client.db("YaariyanGameDB");
         farmCollection = db.collection("farming_soldiers");
-        console.log("✅ Rocket Engine V4 (Smart) Ready!");
+        console.log("✅ Stealth Engine V5 Ready!");
     } catch (err) { console.error(err); }
 }
 
@@ -41,9 +56,7 @@ io.on('connection', (socket) => {
     socket.on('get_stats', async () => {
         if(farmCollection) {
             const fb = await farmCollection.countDocuments({ platform: 'facebook' });
-            const insta = await farmCollection.countDocuments({ platform: 'instagram' });
-            const yt = await farmCollection.countDocuments({ platform: 'youtube' });
-            socket.emit('stats_update', { fb, insta, yt });
+            socket.emit('stats_update', { fb, insta: 0, yt: 0 });
         }
     });
 });
@@ -51,8 +64,6 @@ io.on('connection', (socket) => {
 app.post('/api/add-soldier', async (req, res) => {
     try {
         const { platform, email, password } = req.body;
-        const exist = await farmCollection.findOne({ email });
-        if(exist) return res.json({ success: false, message: "Duplicate ID!" });
         await farmCollection.insertOne({ platform, email, password, status: 'active', addedAt: new Date() });
         res.json({ success: true, message: "Soldier Added!" });
     } catch (e) { res.status(500).json({ success: false }); }
@@ -74,50 +85,49 @@ app.post('/api/delete-soldier', async (req, res) => {
 });
 
 app.post('/api/start-mission', async (req, res) => {
-    const { platform, action, targetLink, speed, commentText } = req.body;
-    if(platform !== 'facebook') return res.json({ success: false, message: "Only FB Supported Now." });
+    const { platform, action, targetLink, speed } = req.body;
+    if(platform !== 'facebook') return res.json({ success: false, message: "Only FB Supported." });
 
     const soldiers = await farmCollection.find({ platform, status: 'active' }).toArray();
     if(soldiers.length === 0) return res.json({ success: false, message: "No Soldiers!" });
 
-    res.json({ success: true, message: `🚀 Mission Started with ${soldiers.length} Soldiers!` });
-    runRocketMission(soldiers, targetLink, action, speed, commentText);
+    res.json({ success: true, message: `🚀 Stealth Mission Started!` });
+    runRocketMission(soldiers, targetLink, action, speed);
 });
 
-async function runRocketMission(soldiers, targetLink, action, speed, comment) {
-    let delay = speed === 'fast' ? 1000 : 5000;
-    let completed = 0;
+async function runRocketMission(soldiers, targetLink, action, speed) {
+    let delay = speed === 'fast' ? 2000 : 5000;
 
     for (const soldier of soldiers) {
         await new Promise(r => setTimeout(r, delay));
         try {
             const status = await performFacebookAction(soldier.email, soldier.password, targetLink, action);
+            
+            let logMsg = "";
             if(status.success) {
-                completed++;
-                const logMsg = `[${soldier.email}] ${action} Success ✅`;
-                console.log(logMsg);
-                io.emit('mission_progress', { platform: 'facebook', log: logMsg, completed, total: soldiers.length });
+                logMsg = `[${soldier.email}] ${action} Success ✅`;
             } else {
-                const logMsg = `[${soldier.email}] Failed: ${status.reason} ❌`;
-                console.log(logMsg);
-                io.emit('mission_progress', { platform: 'facebook', log: logMsg, completed, total: soldiers.length });
+                logMsg = `[${soldier.email}] Failed: ${status.reason} ❌`;
             }
-        } catch (e) { console.log(`[${soldier.email}] Error ❌`); }
+            
+            console.log(logMsg);
+            io.emit('mission_progress', { platform: 'facebook', log: logMsg, completed: 1, total: soldiers.length });
+
+        } catch (e) { console.log(`Error`); }
     }
     io.emit('mission_complete', { message: "Mission Finished!" });
 }
 
-// === SMART FACEBOOK ENGINE ===
 async function performFacebookAction(email, password, link, action) {
     const jar = new CookieJar();
-    const client = wrapper(axios.create({ jar, headers: { 'User-Agent': UserAgent() } }));
+    const client = wrapper(axios.create({ jar, headers: HEADERS }));
 
     try {
-        // ১. লগইন
-        const loginUrl = 'https://mbasic.facebook.com/login/device-based/regular/login/?refsrc=deprecated&lwv=100';
+        // 1. Login Page Load
         const loginPage = await client.get('https://mbasic.facebook.com/login');
         const $ = cheerio.load(loginPage.data);
         
+        const loginUrl = 'https://mbasic.facebook.com/login/device-based/regular/login/?refsrc=deprecated&lwv=100';
         const formData = {
             email: email,
             pass: password,
@@ -130,58 +140,50 @@ async function performFacebookAction(email, password, link, action) {
             login: 'Log In'
         };
 
+        // 2. Submit Login
         await client.post(loginUrl, qs.stringify(formData), {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            headers: { 
+                ...HEADERS,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Referer': 'https://mbasic.facebook.com/login'
+            }
         });
 
-        // ২. পপ-আপ চেক (Save Browser Skip)
-        // আমরা সরাসরি লিংকে না গিয়ে আগে হোমপেজ চেক করব
+        // 3. Check if login worked (by checking home)
         const homeCheck = await client.get('https://mbasic.facebook.com');
-        const $home = cheerio.load(homeCheck.data);
-        
-        // যদি "Save Device" বাটন থাকে, সেটা ক্লিক করে স্কিপ করব
-        const saveDeviceLink = $home('a:contains("Don\'t Save")').attr('href') || $home('a:contains("OK")').attr('href');
-        if(saveDeviceLink) {
-            console.log("Skipping 'Save Device' popup...");
-            await client.get('https://mbasic.facebook.com' + saveDeviceLink);
+        if (homeCheck.data.includes('Log In')) {
+            return { success: false, reason: "Wrong Password or 2FA Required" };
         }
 
-        // ৩. এবার আসল লিংকে যাব
+        // 4. Go to Target
         let mbasicLink = link.replace('www.facebook.com', 'mbasic.facebook.com');
         if(!mbasicLink.includes('mbasic')) mbasicLink = 'https://mbasic.facebook.com';
 
         const targetPage = await client.get(mbasicLink);
         const $target = cheerio.load(targetPage.data);
 
-        // ৪. বাটন খোঁজা (Smart Selector)
+        // 5. Find Button
         let actionUrl;
-        
         if (action === 'like') {
-            // লাইক বাটন বিভিন্ন নামে থাকতে পারে
-            actionUrl = $target('a[href^="/a/like.php"]').attr('href') || 
-                        $target('a:contains("Like")').attr('href') || 
-                        $target('a:contains("React")').attr('href');
+            actionUrl = $target('a[href^="/a/like.php"]').attr('href') || $target('a:contains("Like")').attr('href');
         } else if (action === 'follow') {
-            actionUrl = $target('a[href^="/a/subscribe.php"]').attr('href') || 
-                        $target('a:contains("Follow")').attr('href');
+            actionUrl = $target('a[href^="/a/subscribe.php"]').attr('href') || $target('a:contains("Follow")').attr('href');
         }
 
         if (actionUrl) {
             await client.get('https://mbasic.facebook.com' + actionUrl);
             return { success: true };
         } else {
-            // ডিবাগিং: পেজের টাইটেল দেখা
-            const pageTitle = $target('title').text();
-            return { success: false, reason: `Button not found. Page: ${pageTitle}` };
+            return { success: false, reason: "Button Not Found (Already Liked?)" };
         }
 
     } catch (error) {
-        return { success: false, reason: "Login/Network Error" };
+        return { success: false, reason: "Network Error" };
     }
 }
 
 async function startServer() {
     await connectDB();
-    server.listen(port, () => { console.log(`🚀 Smart Engine Live: ${port}`); });
+    server.listen(port, () => { console.log(`🚀 Stealth Engine Live: ${port}`); });
 }
 startServer();
