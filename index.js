@@ -9,15 +9,13 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// --- ১. ডাইরেক্ট চাবি বসানো হলো (টেস্ট করার জন্য) ---
-
+// --- ১. সিকিউরিটি টিপ: এই কীগুলো .env ফাইলে রাখা উচিত ---
 const uri = "mongodb+srv://nexonblaze8_db_user:5R9kKxC6oFXQrX7V@cluster0.ctfgfd4.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+const GEN_AI_KEY = "AIzaSyAwxEa-AHkI1maYv2FWexYbdZow_Cw1glY"; // আপনার কী
 
-const GEN_AI_KEY = "AIzaSyAwxEa-AHkI1maYv2FWexYbdZow_Cw1glY";
-
-// AI সেটআপ
+// AI সেটআপ (Gemini 1.5 Flash ব্যবহার করা হয়েছে যা দ্রুত)
 const genAI = new GoogleGenerativeAI(GEN_AI_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-pro"});
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // MongoDB সেটআপ
 const client = new MongoClient(uri, {
@@ -33,49 +31,49 @@ async function connectDB() {
         aiCollection = db.collection("knowledge");
         console.log("🔥 Database Connected!");
     } catch (err) {
-        console.error("Database Error:", err);
+        console.error("❌ Database Error:", err);
     }
 }
 connectDB();
 
-app.get('/', (req, res) => res.send('AI Server Ready with Direct Keys! 🚀'));
+app.get('/', (req, res) => res.send('AI Server is Online! 🚀'));
 
 app.post('/chat', async (req, res) => {
     const userMessage = req.body.message;
     if (!userMessage) return res.status(400).json({ reply: "কিছু লিখুন..." });
 
     try {
-        // ১. মেমোরি চেক
+        // ১. মেমোরি চেক (আগে শেখা আছে কিনা)
+        let existingMemory = null;
         if (aiCollection) {
-            const memory = await aiCollection.findOne({ 
-                question: { $regex: new RegExp(`^${userMessage}$`, 'i') } 
+            existingMemory = await aiCollection.findOne({ 
+                question: { $regex: new RegExp(`^${userMessage.trim()}$`, 'i') } 
             });
-
-            if (memory) {
-                return res.json({ reply: memory.answer, source: "Memory (স্মৃতি)" });
-            }
         }
 
-        // ২. ইন্টারনেট থেকে জানা
-        const prompt = `Answer in Bengali or English concisely: ${userMessage}`;
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const aiReply = response.text();
+        if (existingMemory) {
+            return res.json({ reply: existingMemory.answer, source: "স্মৃতি (Memory)" });
+        }
 
-        // ৩. সেভ করা
+        // ২. ইন্টারনেট বা AI থেকে জেনারেট করা
+        const prompt = `You are a helpful AI assistant. Answer the user concisely. User says: ${userMessage}`;
+        const result = await model.generateContent(prompt);
+        const aiReply = result.response.text();
+
+        // ৩. নতুন তথ্য ডাটাবেসে সেভ করা (ভবিষ্যতের জন্য)
         if (aiReply && aiCollection) {
             await aiCollection.insertOne({
-                question: userMessage,
+                question: userMessage.trim(),
                 answer: aiReply,
                 learnedAt: new Date()
             });
         }
 
-        res.json({ reply: aiReply, source: "Internet (শিখে নিলাম)" });
+        res.json({ reply: aiReply, source: "ইন্টারনেট (Learned)" });
 
     } catch (error) {
-        console.error("Error:", error);
-        res.json({ reply: "সার্ভারে সমস্যা হচ্ছে।", source: "Error" });
+        console.error("AI Error:", error);
+        res.status(500).json({ reply: "দুঃখিত, আমি এই মুহূর্তে উত্তর দিতে পারছি না।", source: "Error" });
     }
 });
 
