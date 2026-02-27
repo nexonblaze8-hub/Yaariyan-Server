@@ -9,12 +9,10 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// --- ১. কনফিগারেশন (তোমার দেওয়া চাবিগুলো বসানো হলো) ---
+// --- ১. ডাইরেক্ট চাবি বসানো হলো (টেস্ট করার জন্য) ---
 
-// তোমার MongoDB ডাটাবেস লিংক
 const uri = "mongodb+srv://nexonblaze8_db_user:5R9kKxC6oFXQrX7V@cluster0.ctfgfd4.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 
-// তোমার Google Gemini API Key
 const GEN_AI_KEY = "AIzaSyAwxEa-AHkI1maYv2FWexYbdZow_Cw1glY";
 
 // AI সেটআপ
@@ -31,59 +29,53 @@ let aiCollection;
 async function connectDB() {
     try {
         await client.connect();
-        const db = client.db("SuperAIDB"); // ডাটাবেসের নাম
-        aiCollection = db.collection("knowledge"); // কালেকশন
-        console.log("🔥 Database Connected! MongoDB is Ready.");
+        const db = client.db("SuperAIDB");
+        aiCollection = db.collection("knowledge");
+        console.log("🔥 Database Connected!");
     } catch (err) {
         console.error("Database Error:", err);
     }
 }
 connectDB();
 
-// --- ২. মেইন রুট (সার্ভার চেক করার জন্য) ---
-app.get('/', (req, res) => res.send('AI Server is Running perfectly! 🚀'));
+app.get('/', (req, res) => res.send('AI Server Ready with Direct Keys! 🚀'));
 
-// --- ৩. চ্যাট এবং শেখার লজিক ---
 app.post('/chat', async (req, res) => {
     const userMessage = req.body.message;
     if (!userMessage) return res.status(400).json({ reply: "কিছু লিখুন..." });
 
     try {
-        // ধাপ ১: মেমোরি চেক (MongoDB) - আগের শেখা উত্তর খুঁজছে
-        const memory = await aiCollection.findOne({ 
-            question: { $regex: new RegExp(`^${userMessage}$`, 'i') } 
-        });
+        // ১. মেমোরি চেক
+        if (aiCollection) {
+            const memory = await aiCollection.findOne({ 
+                question: { $regex: new RegExp(`^${userMessage}$`, 'i') } 
+            });
 
-        if (memory) {
-            console.log("💡 Found in Memory!");
-            return res.json({ reply: memory.answer, source: "Memory (স্মৃতি)" });
+            if (memory) {
+                return res.json({ reply: memory.answer, source: "Memory (স্মৃতি)" });
+            }
         }
 
-        // ধাপ ২: মেমোরিতে না থাকলে ইন্টারনেট (Gemini AI) থেকে জানা
-        console.log("🌐 Asking Gemini AI...");
-        
-        // AI-কে নির্দেশ দেওয়া হচ্ছে যেন সে একই ভাষায় ছোট করে উত্তর দেয়
-        const prompt = `Answer the following question concisely and clearly in the SAME LANGUAGE (Bengali or English) as the user asked. Question: ${userMessage}`;
-        
+        // ২. ইন্টারনেট থেকে জানা
+        const prompt = `Answer in Bengali or English concisely: ${userMessage}`;
         const result = await model.generateContent(prompt);
         const response = await result.response;
         const aiReply = response.text();
 
-        // ধাপ ৩: নতুন জ্ঞান ডাটাবেসে সেভ করা (ভবিষ্যতের জন্য)
-        if (aiReply) {
+        // ৩. সেভ করা
+        if (aiReply && aiCollection) {
             await aiCollection.insertOne({
                 question: userMessage,
                 answer: aiReply,
                 learnedAt: new Date()
             });
-            console.log("✅ New knowledge saved to MongoDB!");
         }
 
         res.json({ reply: aiReply, source: "Internet (শিখে নিলাম)" });
 
     } catch (error) {
         console.error("Error:", error);
-        res.json({ reply: "সার্ভারে একটু সমস্যা হচ্ছে, আবার চেষ্টা করুন।", source: "Error" });
+        res.json({ reply: "সার্ভারে সমস্যা হচ্ছে।", source: "Error" });
     }
 });
 
